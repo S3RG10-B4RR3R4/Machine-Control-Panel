@@ -40,12 +40,16 @@ class MotorUpdate(BaseModel):
 class ValveUpdate(BaseModel):
     state: ValveState
 
-# Caché simple en memoria para no golpear el límite diario de Open-Meteo
+# Caché simple en memoria para no golpear el límite diario de Open-Meteo.
+# En Render (producción) SÍ usamos caché. En local (desarrollo) NO,
+# para que cada petición traiga el dato fresco como antes.
+IS_RENDER = os.getenv("RENDER") == "true"
+WEATHER_CACHE_TTL_SECONDS = 900 if IS_RENDER else 0  # 15 min en Render, 0 en local
+
 _weather_cache = {
     "temperature": 28.5,
     "last_fetched": 0.0,
 }
-WEATHER_CACHE_TTL_SECONDS = 900  # 15 minutos
 
 @app.get("/")
 def read_root():
