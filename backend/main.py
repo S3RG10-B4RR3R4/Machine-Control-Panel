@@ -1,4 +1,5 @@
 import os
+import time
 import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -39,6 +40,13 @@ class MotorUpdate(BaseModel):
 class ValveUpdate(BaseModel):
     state: ValveState
 
+# Caché simple en memoria para no golpear el límite diario de Open-Meteo
+_weather_cache = {
+    "temperature": 28.5,
+    "last_fetched": 0.0,
+}
+WEATHER_CACHE_TTL_SECONDS = 900  # 15 minutos
+
 @app.get("/")
 def read_root():
     """Ruta raíz para verificar que el servidor está en línea."""
@@ -47,37 +55,44 @@ def read_root():
 @app.get("/machine")
 async def get_machine_state():
     """Obtiene el estado de la máquina y la temperatura real."""
-    url = (
-        f"https://api.open-meteo.com/v1/forecast"
-        f"?latitude={LATITUDE}&longitude={LONGITUDE}&current=temperature_2m"
-    )
+    now = time.time()
+    temperature = _weather_cache["temperature"]
 
-    temperature = 28.5  # Valor por defecto si hay demora en la red o error
-    headers = {"User-Agent": "MachineControlPanelApp/1.0"}
+    # Si el dato en caché sigue "fresco", lo usamos directo y no llamamos a la API
+    if now - _weather_cache["last_fetched"] < WEATHER_CACHE_TTL_SECONDS:
+        logger.info(f"Usando temperatura en caché: {temperature}")
+    else:
+        url = (
+            f"https://api.open-meteo.com/v1/forecast"
+            f"?latitude={LATITUDE}&longitude={LONGITUDE}&current=temperature_2m"
+        )
+        headers = {"User-Agent": "MachineControlPanelApp/1.0"}
 
-    logger.info(f"Consultando clima en URL: {url}")
+        logger.info(f"Consultando clima en URL: {url}")
 
-    async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-        try:
-            response = await client.get(url, headers=headers)
-            logger.info(f"Open-Meteo status_code: {response.status_code}")
-            logger.info(f"Open-Meteo body (primeros 300 chars): {response.text[:300]}")
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            try:
+                response = await client.get(url, headers=headers)
+                logger.info(f"Open-Meteo status_code: {response.status_code}")
+                logger.info(f"Open-Meteo body (primeros 300 chars): {response.text[:300]}")
 
-            if response.status_code == 200:
-                data = response.json()
-                temperature = data.get("current", {}).get("temperature_2m", temperature)
-                logger.info(f"Temperatura obtenida correctamente: {temperature}")
-            else:
-                logger.warning(
-                    f"Open-Meteo devolvió status {response.status_code}, "
-                    f"usando valor por defecto ({temperature})"
-                )
-        except httpx.TimeoutException as e:
-            logger.error(f"Timeout consultando Open-Meteo: {e}")
-        except httpx.RequestError as e:
-            logger.error(f"Error de red/DNS consultando Open-Meteo: {e}")
-        except Exception as e:
-            logger.error(f"Error inesperado consultando Open-Meteo: {e}")
+                if response.status_code == 200:
+                    data = response.json()
+                    temperature = data.get("current", {}).get("temperature_2m", temperature)
+                    _weather_cache["temperature"] = temperature
+                    _weather_cache["last_fetched"] = now
+                    logger.info(f"Temperatura obtenida correctamente: {temperature}")
+                else:
+                    logger.warning(
+                        f"Open-Meteo devolvió status {response.status_code}, "
+                        f"usando último valor conocido ({temperature})"
+                    )
+            except httpx.TimeoutException as e:
+                logger.error(f"Timeout consultando Open-Meteo: {e}")
+            except httpx.RequestError as e:
+                logger.error(f"Error de red/DNS consultando Open-Meteo: {e}")
+            except Exception as e:
+                logger.error(f"Error inesperado consultando Open-Meteo: {e}")
 
     return {
         "motor_speed": current_machine_state.motor_speed,
