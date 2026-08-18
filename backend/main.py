@@ -1,4 +1,5 @@
 import os
+import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -7,6 +8,10 @@ import httpx
 from models import current_machine_state, ValveState
 
 load_dotenv()
+
+# Logger para poder ver qué pasa en los logs de Render
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("uvicorn.error")
 
 # Lectura segura de coordenadas
 try:
@@ -42,19 +47,37 @@ def read_root():
 @app.get("/machine")
 async def get_machine_state():
     """Obtiene el estado de la máquina y la temperatura real."""
-    url = f"https://api.open-meteo.com/v1/forecast?latitude={LATITUDE}&longitude={LONGITUDE}&current=temperature_2m"
-    
-    temperature = 28.5  # Valor inicial por defecto si hay demora en la red
+    url = (
+        f"https://api.open-meteo.com/v1/forecast"
+        f"?latitude={LATITUDE}&longitude={LONGITUDE}&current=temperature_2m"
+    )
+
+    temperature = 28.5  # Valor por defecto si hay demora en la red o error
     headers = {"User-Agent": "MachineControlPanelApp/1.0"}
+
+    logger.info(f"Consultando clima en URL: {url}")
 
     async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
         try:
             response = await client.get(url, headers=headers)
+            logger.info(f"Open-Meteo status_code: {response.status_code}")
+            logger.info(f"Open-Meteo body (primeros 300 chars): {response.text[:300]}")
+
             if response.status_code == 200:
                 data = response.json()
                 temperature = data.get("current", {}).get("temperature_2m", temperature)
+                logger.info(f"Temperatura obtenida correctamente: {temperature}")
+            else:
+                logger.warning(
+                    f"Open-Meteo devolvió status {response.status_code}, "
+                    f"usando valor por defecto ({temperature})"
+                )
+        except httpx.TimeoutException as e:
+            logger.error(f"Timeout consultando Open-Meteo: {e}")
+        except httpx.RequestError as e:
+            logger.error(f"Error de red/DNS consultando Open-Meteo: {e}")
         except Exception as e:
-            print(f"Aviso: Usando temperatura por defecto por timeout/red: {e}")
+            logger.error(f"Error inesperado consultando Open-Meteo: {e}")
 
     return {
         "motor_speed": current_machine_state.motor_speed,
