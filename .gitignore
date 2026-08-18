@@ -1,0 +1,15 @@
+# Entornos virtuales de Python
+venv/
+env/
+__pycache__/
+*.pyc
+
+# Dependencias de Node.js (React)
+node_modules/
+
+# Variables de entorno (Secretos, API keys)
+.env
+
+# Archivos del sistema operativo
+.DS_Store
+Thumbs.db
